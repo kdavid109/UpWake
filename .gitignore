@@ -1,0 +1,20 @@
+# Ignore specific files
+config.ini
+secrets.txt
+
+# Ignore directories
+build/
+tmp/
+.idea/
+
+# Ignore files with specific extensions
+*.log
+*.pyc
+*.DS_Store
+
+# Ignore files within a specific directory
+logs/*.log
+
+# Negate a pattern (include a file even if it matches a previous pattern)
+!important.log
+
