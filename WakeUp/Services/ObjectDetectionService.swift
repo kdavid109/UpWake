@@ -60,72 +60,168 @@ class ObjectDetectionService: ObservableObject {
         print("Generated object ID: \(objectId)")
         
         // Create storage path using both object name and ID
-        let safeObjectName = objectName.replacingOccurrences(of: "/", with: "-")
-        let imageName = "\(objectId)_\(safeObjectName).jpg"
+        let safeObjectName = objectName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "", options: .regularExpression)
+        
+        // First, remove the background
+        print("Removing background from image...")
+        let processedImageData = try await removeBackground(from: imageData)
+        print("Background removal successful")
+        
+        let imageName = "\(objectId)_\(safeObjectName).png" // Using PNG for better quality
         let storagePath = "users/\(userId)/objects/\(imageName)"
         print("Generated storage path: \(storagePath)")
         
         let imageRef = storage.child(storagePath)
         print("Created storage reference")
         
-        // Upload the image with metadata
+        // Upload the processed image with metadata
         let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
+        metadata.contentType = "image/png"
         metadata.customMetadata = [
             "uploadStartTime": "\(Date().timeIntervalSince1970)",
             "userId": userId,
             "objectName": objectName,
-            "objectId": objectId
+            "objectId": objectId,
+            "bucket": "upwake-fdfad.firebasestorage.app",
+            "backgroundRemoved": "true"
         ]
         
         print("Starting file upload...")
-        do {
-            _ = try await imageRef.putData(imageData, metadata: metadata)
-            print("Initial upload completed successfully")
+        
+        // Function to retry upload with exponential backoff
+        func uploadWithRetry(attempts: Int = 3) async throws -> StorageMetadata {
+            var lastError: Error?
             
-            // Get metadata after upload
-            let uploadedMetadata = try await imageRef.getMetadata()
-            print("Upload metadata - size: \(uploadedMetadata.size), contentType: \(uploadedMetadata.contentType ?? "unknown")")
-        } catch {
-            print("Error during initial upload: \(error.localizedDescription)")
-            throw error
+            for attempt in 1...attempts {
+                do {
+                    print("Upload attempt \(attempt)/\(attempts)")
+                    let uploadTask = imageRef.putData(processedImageData, metadata: metadata)
+                    
+                    _ = uploadTask.observe(.progress) { snapshot in
+                        let percentComplete = Double(snapshot.progress?.completedUnitCount ?? 0) / Double(snapshot.progress?.totalUnitCount ?? 1)
+                        print("Upload progress: \(Int(percentComplete * 100))%")
+                    }
+                    
+                    _ = try await uploadTask
+                    let uploadedMetadata = try await imageRef.getMetadata()
+                    print("Upload successful on attempt \(attempt)")
+                    
+                    let exists = try await checkFileExists(ref: imageRef)
+                    if !exists {
+                        throw UploadError.uploadFailed
+                    }
+                    
+                    return uploadedMetadata
+                } catch {
+                    lastError = error
+                    print("Upload attempt \(attempt) failed: \(error.localizedDescription)")
+                    if attempt < attempts {
+                        let delay = TimeInterval(pow(2.0, Double(attempt)))
+                        print("Waiting \(delay) seconds before retry...")
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+            }
+            throw lastError ?? UploadError.uploadFailed
         }
         
-        print("Starting upload verification...")
-        let downloadURL = try await verifyUpload(ref: imageRef)
-        print("Upload verified successfully")
+        // Helper function to check if file exists
+        func checkFileExists(ref: StorageReference) async throws -> Bool {
+            do {
+                let metadata = try await ref.getMetadata()
+                return metadata.size > 0
+            } catch {
+                return false
+            }
+        }
         
-        print("Waiting 2 seconds before Firestore update...")
-        try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-        
-        // Use the same objectId for Firestore document
-        print("Creating Firestore document with ID: \(objectId)")
-        
-        let objectDoc = db.collection("users").document(userId)
-            .collection("objects").document(objectId)
-        
-        let data: [String: Any] = [
-            "id": objectId,
-            "name": objectName,
-            "imageUrl": downloadURL.absoluteString,
-            "storagePath": storagePath,
-            "timestamp": FieldValue.serverTimestamp(),
-            "processed": false,
-            "uploadComplete": true,
-            "originalFileName": imageName,
-            "status": "pending"  // Add status field
-        ]
-        
-        print("Updating Firestore document...")
+        // Perform upload with retries
         do {
+            let uploadedMetadata = try await uploadWithRetry()
+            print("Final upload successful. Size: \(uploadedMetadata.size), contentType: \(uploadedMetadata.contentType ?? "unknown")")
+            
+            // Wait a moment to ensure the upload is fully processed
+            try await Task.sleep(nanoseconds: 2 * 1_000_000_000)
+            
+            // Get the download URL
+            print("Getting download URL...")
+            let downloadURL = try await imageRef.downloadURL()
+            print("Got download URL: \(downloadURL.absoluteString)")
+            
+            // Create Firestore document
+            print("Creating Firestore document with ID: \(objectId)")
+            let objectDoc = db.collection("users").document(userId)
+                .collection("objects").document(objectId)
+            
+            let data: [String: Any] = [
+                "id": objectId,
+                "name": objectName,
+                "imageUrl": downloadURL.absoluteString,
+                "storagePath": storagePath,
+                "timestamp": FieldValue.serverTimestamp(),
+                "processed": true,
+                "uploadComplete": true,
+                "status": "completed",
+                "dateScanned": Date(),
+                "bucket": "upwake-fdfad.firebasestorage.app",
+                "backgroundRemoved": true
+            ]
+            
+            print("Document data to be saved:")
+            data.forEach { key, value in
+                print("\(key): \(value)")
+            }
+            
+            print("Updating Firestore document...")
             try await objectDoc.setData(data)
             print("Firestore document created successfully")
+            
+            print("--- Image upload process completed successfully ---\n")
         } catch {
-            print("Error creating Firestore document: \(error.localizedDescription)")
+            print("Error during upload process: \(error.localizedDescription)")
+            try? await imageRef.delete()
             throw error
         }
+    }
+    
+    private func removeBackground(from imageData: Data) async throws -> Data {
+        let apiKey = "YOUR_REMOVE_BG_API_KEY"  // Replace with your actual API key
+        let url = URL(string: "https://api.remove.bg/v1.0/removebg")!
         
-        print("--- Image upload process completed successfully ---\n")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "X-Api-Key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let base64Image = imageData.base64EncodedString()
+        let requestBody: [String: Any] = [
+            "image_file_b64": base64Image,
+            "size": "auto",
+            "format": "png",
+            "type": "auto",
+            "bg_color": "white"
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UploadError.uploadFailed
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            print("Remove.bg API error: \(httpResponse.statusCode)")
+            if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                print("Error details: \(errorJson)")
+            }
+            throw UploadError.uploadFailed
+        }
+        
+        return data
     }
 }
 

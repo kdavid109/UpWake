@@ -155,7 +155,7 @@ struct ObjectCard: View {
                             .scaledToFill()
                             .frame(height: 160)
                             .clipped()
-                            .allowsHitTesting(false) // Disable interaction with the image
+                            .allowsHitTesting(false)
                         
                         if isInEditMode {
                             Button(action: {
@@ -168,13 +168,9 @@ struct ObjectCard: View {
                             }
                             .padding(8)
                             .transition(.scale.combined(with: .opacity))
-                            .zIndex(1) // Ensure delete button is above everything
+                            .zIndex(1)
                         }
                     }
-                } else {
-                    Image(systemName: "cube.fill")
-                        .font(.system(size: 30))
-                        .foregroundColor(.teal)
                 }
             }
             .frame(height: 160)
@@ -184,7 +180,7 @@ struct ObjectCard: View {
             .onLongPressGesture {
                 enterEditMode()
             }
-            .allowsHitTesting(!isInEditMode) // Only allow long press when not in edit mode
+            .allowsHitTesting(!isInEditMode)
             
             // Object Details
             VStack(alignment: .leading, spacing: 4) {
@@ -197,22 +193,10 @@ struct ObjectCard: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .allowsHitTesting(false) // Disable interaction with text
         }
         .background(Color(colorScheme == .dark ? .black : .white).opacity(colorScheme == .dark ? 0.3 : 1))
         .cornerRadius(12)
         .shadow(color: Color(.sRGBLinear, white: 0, opacity: colorScheme == .dark ? 0.3 : 0.1), radius: 5)
-        .overlay {
-            if isInEditMode {
-                Color.black.opacity(0.001) // Nearly invisible overlay
-                    .onTapGesture {
-                        withAnimation {
-                            isInEditMode = false
-                            shakeOffset = 0
-                        }
-                    }
-            }
-        }
         .confirmationDialog(
             "Delete \(object.name)?",
             isPresented: $showDeleteConfirmation,
@@ -221,23 +205,18 @@ struct ObjectCard: View {
             Button("Delete", role: .destructive) {
                 Task {
                     do {
-                        print("DEBUG: Delete button pressed for object: \(object.name)")
                         try await objectsManager.deleteObject(object)
-                        print("DEBUG: Delete operation completed successfully")
                         withAnimation {
                             isInEditMode = false
                             shakeOffset = 0
                         }
                     } catch {
-                        print("DEBUG: Delete operation failed: \(error)")
                         errorMessage = error.localizedDescription
                         showError = true
                     }
                 }
             }
             Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This action cannot be undone.")
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -248,11 +227,69 @@ struct ObjectCard: View {
             await loadImage()
         }
     }
+
+    private func loadImage() async {
+        print("Starting to load image for object: \(object.name)")
+        print("Image URL: \(object.imageUrl)")
+        
+        guard let url = URL(string: object.imageUrl) else {
+            print("Invalid URL for object: \(object.name)")
+            DispatchQueue.main.async {
+                self.imageLoadError = true
+                self.isLoadingImage = false
+            }
+            return
+        }
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("Invalid response type for object: \(object.name)")
+                DispatchQueue.main.async {
+                    self.imageLoadError = true
+                    self.isLoadingImage = false
+                }
+                return
+            }
+            
+            print("HTTP Status code: \(httpResponse.statusCode) for object: \(object.name)")
+            
+            guard httpResponse.statusCode == 200 else {
+                print("HTTP Error \(httpResponse.statusCode) for object: \(object.name)")
+                DispatchQueue.main.async {
+                    self.imageLoadError = true
+                    self.isLoadingImage = false
+                }
+                return
+            }
+            
+            if let downloadedImage = UIImage(data: data) {
+                print("Successfully loaded image for object: \(object.name)")
+                DispatchQueue.main.async {
+                    self.image = downloadedImage
+                    self.imageLoadError = false
+                    self.isLoadingImage = false
+                }
+            } else {
+                print("Failed to create UIImage from data for object: \(object.name)")
+                DispatchQueue.main.async {
+                    self.imageLoadError = true
+                    self.isLoadingImage = false
+                }
+            }
+        } catch {
+            print("Error loading image for \(object.name): \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.imageLoadError = true
+                self.isLoadingImage = false
+            }
+        }
+    }
     
     private func enterEditMode() {
         withAnimation {
             isInEditMode = true
-            // Trigger shake animation
             shakeOffset = 5
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation {
@@ -271,55 +308,12 @@ struct ObjectCard: View {
                                 shakeOffset = 0
                             }
                         }
+                        }
                     }
                 }
             }
         }
     }
-    
-    private func loadImage() async {
-        guard let url = URL(string: object.imageUrl) else {
-            DispatchQueue.main.async {
-                self.imageLoadError = true
-                self.isLoadingImage = false
-            }
-            return
-        }
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            
-            // Check if we got a successful response
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                DispatchQueue.main.async {
-                    self.imageLoadError = true
-                    self.isLoadingImage = false
-                }
-                return
-            }
-            
-            if let downloadedImage = UIImage(data: data) {
-                DispatchQueue.main.async {
-                    self.image = downloadedImage
-                    self.imageLoadError = false
-                    self.isLoadingImage = false
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.imageLoadError = true
-                    self.isLoadingImage = false
-                }
-            }
-        } catch {
-            print("Error loading image for \(object.name): \(error)")
-            DispatchQueue.main.async {
-                self.imageLoadError = true
-                self.isLoadingImage = false
-            }
-        }
-    }
-}
 
 // Scanned Object Model
 struct ScannedObject: Identifiable {
@@ -335,43 +329,10 @@ struct ScannedObject: Identifiable {
 // Objects Manager
 class ObjectsManager: ObservableObject {
     @Published var objects: [ScannedObject] = []
-    private let db = Firestore.firestore()
     private let storage = Storage.storage().reference()
     
     init() {
         loadObjects()
-    }
-    
-    func deleteObject(_ object: ScannedObject) async throws {
-        guard let userId = Auth.auth().currentUser?.uid else {
-            print("DEBUG: No user ID found for deletion")
-            return
-        }
-        
-        print("DEBUG: Starting deletion process for object: \(object.id)")
-        
-        do {
-            // Delete from Storage using the stored path
-            print("DEBUG: Attempting to delete from storage: \(object.storagePath)")
-            try await storage.child(object.storagePath).delete()
-            print("DEBUG: Successfully deleted from storage")
-            
-            // Delete from Firestore
-            let docRef = db.collection("users").document(userId)
-                .collection("objects").document(object.id)
-            
-            print("DEBUG: Attempting to delete from Firestore...")
-            try await docRef.delete()
-            print("DEBUG: Successfully deleted from Firestore")
-            
-            // Update local state
-            DispatchQueue.main.async {
-                self.objects.removeAll { $0.id == object.id }
-            }
-        } catch {
-            print("DEBUG: Error during deletion: \(error)")
-            throw error
-        }
     }
     
     private func loadObjects() {
@@ -380,124 +341,80 @@ class ObjectsManager: ObservableObject {
             return
         }
         
-        print("Starting to load objects for user: \(userId)")
+        print("Starting to load objects from Storage for user: \(userId)")
         
-        db.collection("users").document(userId)
-            .collection("objects")
-            .order(by: "timestamp", descending: true)
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
-                    print("Error fetching objects: \(error.localizedDescription)")
-                    return
-                }
+        // Reference to the user's objects directory
+        let objectsRef = storage.child("users/\(userId)/objects")
+        
+        // List all items in the directory
+        Task {
+            do {
+                let result = try await objectsRef.listAll()
+                print("Found \(result.items.count) items in storage")
                 
-                guard let documents = snapshot?.documents else {
-                    print("No documents found")
-                    return
-                }
+                var validObjects: [ScannedObject] = []
                 
-                Task {
-                    var validObjects: [ScannedObject] = []
+                for item in result.items {
+                    print("Processing storage item: \(item.name)")
                     
-                    for document in documents {
-                        let data = document.data()
-                        print("Processing document: \(document.documentID)")
+                    do {
+                        // Get the download URL
+                        let downloadURL = try await item.downloadURL()
+                        print("Got download URL: \(downloadURL.absoluteString)")
                         
-                        guard let name = data["name"] as? String,
-                              let imageUrl = data["imageUrl"] as? String,
-                              let storagePath = data["storagePath"] as? String else {
-                            print("Missing required fields for document: \(document.documentID)")
-                            continue
-                        }
+                        // Get metadata
+                        let metadata = try await item.getMetadata()
                         
-                        let processed = data["processed"] as? Bool ?? false
-                        let status = data["status"] as? String ?? "pending"
-                        let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
+                        // Extract object name from the filename (remove UUID and extension)
+                        let parts = item.name.split(separator: "_")
+                        let objectId = String(parts[0])
+                        let objectName = parts.dropFirst().joined(separator: "_").replacingOccurrences(of: ".jpg", with: "")
                         
-                        // Verify image exists in Storage
-                        let imageRef = self?.storage.child(storagePath)
-                        do {
-                            _ = try await imageRef?.downloadURL()
-                            
-                            let object = ScannedObject(
-                                id: document.documentID,
-                                name: name,
-                                imageUrl: imageUrl,
-                                dateScanned: timestamp,
-                                storagePath: storagePath,
-                                processed: processed,
-                                status: status
-                            )
-                            validObjects.append(object)
-                            print("Added valid object: \(name)")
-                        } catch {
-                            print("Failed to verify image for \(name): \(error.localizedDescription)")
-                            // Image doesn't exist in storage, delete the document
-                            try? await document.reference.delete()
-                            print("Deleted document for missing image: \(storagePath)")
-                        }
-                    }
-                    
-                    print("Loaded \(validObjects.count) valid objects")
-                    
-                    DispatchQueue.main.async {
-                        self?.objects = validObjects
+                        let object = ScannedObject(
+                            id: objectId,
+                            name: objectName.replacingOccurrences(of: "_", with: " "),
+                            imageUrl: downloadURL.absoluteString,
+                            dateScanned: metadata.timeCreated ?? Date(),
+                            storagePath: item.fullPath,
+                            processed: metadata.customMetadata?["processed"] == "true",
+                            status: metadata.customMetadata?["status"] ?? "pending"
+                        )
+                        
+                        validObjects.append(object)
+                        print("Added object: \(object.name)")
+                    } catch {
+                        print("Error processing item \(item.name): \(error.localizedDescription)")
                     }
                 }
+                
+                print("Successfully loaded \(validObjects.count) objects")
+                
+                DispatchQueue.main.async {
+                    self.objects = validObjects.sorted(by: { $0.dateScanned > $1.dateScanned })
+                }
+            } catch {
+                print("Error listing objects: \(error.localizedDescription)")
             }
+        }
     }
     
-    func reloadObjects() async {
-        guard let userId = Auth.auth().currentUser?.uid else { return }
+    func deleteObject(_ object: ScannedObject) async throws {
+        print("Starting deletion of object: \(object.name)")
         
-        do {
-            let snapshot = try await db.collection("users").document(userId)
-                .collection("objects")
-                .order(by: "timestamp", descending: true)
-                .getDocuments()
-            
-            var validObjects: [ScannedObject] = []
-            
-            for document in snapshot.documents {
-                let data = document.data()
-                
-                guard let name = data["name"] as? String,
-                      let imageUrl = data["imageUrl"] as? String,
-                      let storagePath = data["storagePath"] as? String else {
-                    continue
-                }
-                
-                let processed = data["processed"] as? Bool ?? false
-                let status = data["status"] as? String ?? "pending"
-                let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
-                
-                // Verify image exists
-                let imageRef = storage.child(storagePath)
-                do {
-                    _ = try await imageRef.downloadURL()
-                    
-                    let object = ScannedObject(
-                        id: document.documentID,
-                        name: name,
-                        imageUrl: imageUrl,
-                        dateScanned: timestamp,
-                        storagePath: storagePath,
-                        processed: processed,
-                        status: status
-                    )
-                    validObjects.append(object)
-                } catch {
-                    // Image doesn't exist, delete document
-                    try? await document.reference.delete()
-                }
-            }
-            
-            DispatchQueue.main.async {
-                self.objects = validObjects
-            }
-        } catch {
-            print("Error reloading objects: \(error)")
+        // Delete from Storage
+        let imageRef = storage.child(object.storagePath)
+        try await imageRef.delete()
+        
+        // Update local state
+        DispatchQueue.main.async {
+            self.objects.removeAll { $0.id == object.id }
         }
+        
+        print("Successfully deleted object: \(object.name)")
+    }
+    
+    func reloadObjects() {
+        loadObjects()
     }
 }
 

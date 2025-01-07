@@ -118,13 +118,14 @@ exports.processImage = onObjectFinalized({
 
         // Get the Firestore document reference
         const userId = filePath.split('/')[1];
-        const objectId = filePath.split('/').pop().split('.')[0]; // Remove file extension
+        // Extract objectId from the filename (it's before the underscore)
+        const objectId = filePath.split('/').pop().split('_')[0];
         const docRef = admin.firestore()
             .collection('users').doc(userId)
             .collection('objects').doc(objectId);
 
         // Update Firestore document with processed image
-        console.log('Updating Firestore document');
+        console.log('Updating Firestore document with ID:', objectId);
         await docRef.update({
             processedImageUrl: processedUrl,
             processed: true,
